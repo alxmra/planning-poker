@@ -1,0 +1,36 @@
+# VPS setup: Caddy terminates HTTPS (automatic Let's Encrypt) and proxies to the app.
+# Usage: DOMAIN=poker.example.com docker compose up -d
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      TRUST_PROXY: "1"
+      PASSWORD: ${PASSWORD:-}
+      ROOM_TTL_HOURS: ${ROOM_TTL_HOURS:-168}
+      MAX_ROOMS: ${MAX_ROOMS:-1000}
+    volumes:
+      - data:/app/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 64
+    expose: ["3000"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN, e.g. poker.example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

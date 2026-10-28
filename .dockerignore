@@ -1,3 +1,5 @@
 data
 .git
 node_modules
+docker-compose.yml
+Caddyfile

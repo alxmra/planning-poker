@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Planning Poker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🃏</text></svg>">
 <style>
   :root { color-scheme: light dark; --bg:#f1f3f6; --card:#fff; --ink:#1d2330; --muted:#6b7280; --accent:#2f6fed; --accent-soft:#e5edff; --line:#dde1e7; --ok:#16a34a; --ok-soft:#dcfce7;
           --felt1:#2f7d57; --felt2:#1f5f40; --back1:#3b5bdb; --back2:#2a43a8; --face:#fff; --faceink:#1d2330; --shadow:0 2px 8px rgba(20,30,50,.12); }
@@ -27,17 +28,18 @@
   #stories li { padding:8px; border-radius:8px; cursor:pointer; display:flex; justify-content:space-between; align-items:center; gap:8px; border-left:3px solid transparent; transition:background .3s, border-color .3s, padding-left .3s; }
   #stories li:hover { background:var(--bg); }
   #stories li.cur { background:var(--accent-soft); border-left-color:var(--accent); font-weight:600; padding-left:12px; }
-  #stories .txt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  #stories .txt { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; overflow-wrap:anywhere; min-width:0; }
   #stories .right { white-space:nowrap; display:flex; align-items:center; gap:4px; }
   .est { min-width:28px; text-align:center; background:var(--bg); border-radius:999px; padding:0 8px; font-weight:600; }
   .est.set { background:var(--ok-soft); color:var(--ok); }
   .est.pulse { animation:pulse .7s ease; }
   .badge { font-size:11px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:0 6px; }
-  .badge.rev { color:var(--ok); border-color:var(--ok); }
   .summary { white-space:pre-wrap; color:var(--muted); margin:8px 0; }
+  .ca { margin:8px 0; } .ca summary { cursor:pointer; font-weight:600; font-size:14px; }
+  .ca div { white-space:pre-wrap; max-height:180px; overflow:auto; margin-top:4px; padding:8px 10px; border-left:3px solid var(--accent); background:var(--bg); border-radius:6px; font-size:14px; }
   #stage { position:relative; }
   #table { display:flex; flex-wrap:wrap; gap:18px 16px; margin:14px 0; padding:22px 12px; justify-content:center; min-height:150px; border-radius:20px; background:radial-gradient(ellipse at center, var(--felt1), var(--felt2)); box-shadow:inset 0 0 30px rgba(0,0,0,.35); }
-  .seat { text-align:center; width:76px; color:#fff; transition:opacity .3s, filter .3s; animation:pop .45s cubic-bezier(.3,1.6,.5,1) both; }
+  .seat { text-align:center; width:92px; color:#fff; transition:opacity .3s, filter .3s; animation:pop .45s cubic-bezier(.3,1.6,.5,1) both; }
   .seat.offline { opacity:.4; filter:grayscale(1); }
   .seat.spec .card { display:none; }
   .seat .eye { display:none; height:80px; font-size:28px; line-height:80px; opacity:.8; }
@@ -49,11 +51,12 @@
   .face.back { background:rgba(255,255,255,.08); border-style:dashed; color:#fff; transition:background .3s; }
   .seat.voted .face.back { background:repeating-linear-gradient(45deg,var(--back1) 0 6px,var(--back2) 6px 12px); border-style:solid; border-color:#fff; }
   .face.front { background:var(--face); color:var(--faceink); transform:rotateY(180deg); border:2px solid var(--accent); }
-  .seat .n { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  #overlay { position:absolute; inset:0; display:none; align-items:center; justify-content:center; flex-direction:column; pointer-events:none; z-index:5; color:#fff; text-shadow:0 4px 20px rgba(0,0,0,.6); }
+  .seat .n { font-size:13px; line-height:1.25; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; overflow:hidden; overflow-wrap:anywhere; }
+  #overlay { position:absolute; inset:0; border-radius:20px; background:rgba(0,0,0,.5); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); animation:fade .25s ease-out; display:none; align-items:center; justify-content:center; flex-direction:column; pointer-events:none; z-index:5; color:#fff; text-shadow:0 4px 20px rgba(0,0,0,.6); }
   #overlay.on { display:flex; }
   #overlay b { font-size:110px; line-height:1; animation:count 1s ease-out; }
-  #overlay small { font-size:13px; opacity:.85; }
+  #overlay small { font-size:13px; margin-top:8px; padding:3px 10px; border-radius:99px; background:rgba(0,0,0,.35); }
+  @keyframes fade { from { opacity:0; } }
   #result { text-align:center; margin:12px 0; min-height:24px; }
   #result input { width:70px; font:inherit; padding:5px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
   .bars { display:flex; flex-direction:column; gap:4px; max-width:360px; margin:6px auto; }
@@ -83,9 +86,19 @@
   @keyframes pulse { 0% { transform:scale(1); } 40% { transform:scale(1.35); box-shadow:0 0 0 6px var(--ok-soft); } 100% { transform:scale(1); } }
   @keyframes count { from { transform:scale(1.8); opacity:0; } to { transform:scale(1); opacity:1; } }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; transition-delay:0s !important; } }
+  #landing { display:none; min-height:100vh; align-items:center; justify-content:center; padding:16px; }
+  #landing .panel { max-width:420px; text-align:center; padding:28px; }
+  body.landing #landing { display:flex; }
+  body.landing > header, body.landing > main { display:none; }
 </style>
 </head>
 <body>
+<div id="landing"><div class="panel">
+  <h1>🃏 Planning Poker</h1>
+  <p id="landingMsg"></p>
+  <button class="primary" id="create">Create a new room</button>
+  <p class="muted">Share the room link with your team. Idle rooms are deleted automatically.</p>
+</div></div>
 <header>
   <h1>🃏 Planning Poker</h1>
   <span class="muted">Room <b id="roomId"></b> · you are <b id="me"></b> <span id="conn"></span></span>
@@ -125,6 +138,7 @@
     <label>Key <input name="key"></label>
     <label>Title <input name="title"></label>
     <label>Summary <textarea name="summary"></textarea></label>
+    <label>Acceptance criteria <textarea name="criteria"></textarea></label>
     <label>Link <input name="link"></label>
     <label>Estimate <input name="estimate"></label>
     <div class="row">
@@ -139,7 +153,7 @@
   <b>Keyboard shortcuts</b>
   <p><kbd>1</kbd>–<kbd>9</kbd>, <kbd>0</kbd> vote with deck card by position</p>
   <p><kbd>r</kbd> reveal now &nbsp; <kbd>v</kbd> re-vote &nbsp; <kbd>n</kbd> next story &nbsp; <kbd>p</kbd> previous story &nbsp; <kbd>?</kbd> this help</p>
-  <div class="row"><span style="flex:1"></span><button onclick="$('helpDlg').close()">Close</button></div>
+  <div class="row"><span style="flex:1"></span><button id="helpClose">Close</button></div>
 </dialog>
 <div id="toast"></div>
 <canvas id="confetti"></canvas>
@@ -149,20 +163,17 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
-const ROOM_RE = /^[\w-]{1,40}$/, PID_RE = /^[\w-]{1,64}$/;
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : [0, 0, 0].map(() => Math.random().toString(36).slice(2)).join(''));
+const ROOM_RE = /^[\w-]{1,40}$/, PID_RE = /^[\w-]{16,64}$/;
 
-const params = new URLSearchParams(location.search);
-let room = params.get('room');
-if (!room || !ROOM_RE.test(room)) {
-  room = Math.random().toString(36).slice(2, 8);
-  history.replaceState(null, '', '?room=' + room);
-}
+let room = new URLSearchParams(location.search).get('room');
+if (room && !ROOM_RE.test(room)) room = null;
+// pid is a secret (proves who you are); the server shows others only a derived id (myId)
 let pid = store.get('pp-pid');
 if (!pid || !PID_RE.test(pid)) { pid = uid(); store.set('pp-pid', pid); }
-let name = (store.get('pp-name') || prompt('Your name?') || 'anon').trim().slice(0, 40) || 'anon';
-store.set('pp-name', name);
+let name = (store.get('pp-name') || '').trim().slice(0, 40);
 let key = store.get('pp-key') || '';
+let myId = null;
 
 let state = null, myVote = null, myStory = null, es = null, offset = 0, prev = null;
 // my own votes per story (server hides them until reveal), so selection survives reloads / story switches
@@ -184,18 +195,39 @@ function askKey() {
   key = k; store.set('pp-key', k); setExport();
   return true;
 }
-async function probe() { // true if server accepts us (or unreachable)
-  try { return (await fetch('/export?' + q())).status !== 401; } catch { return true; }
+async function probe() { // http status of the room (0 = unreachable)
+  try { return (await fetch('/ping?' + q())).status; } catch { return 0; }
+}
+const GONE = 'This room does not exist or has expired.';
+function showLanding(msg = '') {
+  if (es) { es.close(); es = null; }
+  $('landingMsg').textContent = msg;
+  document.body.classList.add('landing');
+}
+async function createRoom() {
+  for (;;) {
+    const r = await fetch('/rooms?key=' + encodeURIComponent(key), { method: 'POST' }).catch(() => null);
+    if (r && r.status === 401 && askKey()) continue;
+    if (!r || !r.ok) { $('landingMsg').textContent = r ? await r.text() : 'Network error'; return; }
+    location.href = '?room=' + (await r.json()).room;
+    return;
+  }
 }
 
 function connect() {
   if (es) es.close();
-  es = new EventSource(`/events?${q(`&pid=${encodeURIComponent(pid)}&name=${encodeURIComponent(name)}`)}`);
+  const me = es = new EventSource(`/events?${q(`&pid=${encodeURIComponent(pid)}&name=${encodeURIComponent(name)}`)}`);
   es.onopen = () => $('conn').textContent = '';
+  es.addEventListener('me', e => { myId = JSON.parse(e.data).id; });
   es.onmessage = e => { state = JSON.parse(e.data); offset = state.now - Date.now(); render(); };
   es.onerror = async () => {
     $('conn').textContent = '· reconnecting…';
-    if (es.readyState === EventSource.CLOSED && !(await probe()) && askKey()) connect();
+    if (me.readyState !== EventSource.CLOSED) return; // browser retries by itself
+    const st = await probe();
+    if (es !== me) return;
+    if (st === 404) return showLanding(GONE);
+    if (st === 401 && !askKey()) return;
+    setTimeout(() => es === me && connect(), st === 401 ? 0 : 3000);
   };
 }
 
@@ -207,7 +239,9 @@ async function send(type, extra = {}) {
     }).catch(() => null);
     if (!r) { toast('Network error'); return null; }
     if (r.status === 401 && t === 0 && askKey()) { connect(); continue; }
-    if (!r.ok) toast('Error ' + r.status);
+    if (r.status === 404) showLanding(GONE);
+    else if (r.status === 429) toast('Too many requests, slow down');
+    else if (!r.ok) toast('Error ' + r.status);
     return r;
   }
 }
@@ -284,14 +318,14 @@ function renderStories(s) {
     setText(li.querySelector('.k'), st.key || '');
     const t = st.title || (st.summary || '').split('\n')[0] || st.key;
     setText(li.querySelector('.t'), t); li.title = t;
+    // before reveal: only "N voted"; estimate pill appears once there is one
     const b = li.querySelector('.badge');
-    b.classList.toggle('rev', !!st.revealed);
-    b.style.display = st.revealed || st.voteCount ? '' : 'none';
-    setText(b, st.revealed ? '✓ ' + st.voteCount : String(st.voteCount));
-    b.title = st.revealed ? 'Revealed' : st.voteCount + ' voted';
-    const e = li.querySelector('.est'), est = st.estimate || '–';
-    e.classList.toggle('set', !!st.estimate);
-    if (setText(e, est) && st.estimate && prev) bump(e);
+    b.style.display = !st.revealed && st.voteCount ? '' : 'none';
+    setText(b, st.voteCount + ' voted');
+    const e = li.querySelector('.est');
+    e.style.display = st.estimate ? '' : 'none';
+    e.classList.add('set');
+    if (setText(e, st.estimate || '') && st.estimate && prev) bump(e);
   });
 }
 
@@ -304,7 +338,8 @@ function renderStory(cur, idx) {
   $('story').innerHTML = cur ? `
     <div class="muted">${esc(cur.key)}${link} · <button class="edit" data-edit="${idx}">✎ Edit</button></div>
     <h2 style="margin:4px 0">${esc(cur.title || cur.key)}</h2>
-    <div class="summary">${esc(cur.summary)}</div>`
+    <div class="summary">${esc(cur.summary)}</div>
+    ${cur.criteria ? `<details class="ca" open><summary>Acceptance criteria</summary><div>${esc(cur.criteria)}</div></details>` : ''}`
     : '<h2 class="muted">No story selected — vote freely or import stories.</h2>';
 }
 
@@ -329,8 +364,8 @@ function renderSeats(s) {
     el.classList.toggle('flipped', flipped);
     setText(el.querySelector('.back'), p.voted && !spec ? '✓' : '');
     if (s.revealed) setText(el.querySelector('.front'), p.vote != null ? String(p.vote) : '–');
-    const n = el.querySelector('.n'), label = p.name + (p.pid === pid ? ' (you)' : '') + (spec ? ' · spectator' : '');
-    setText(n, label); n.title = label;
+    const n = el.querySelector('.n'), label = p.name + (p.pid === myId ? ' (you)' : '');
+    setText(n, label); n.title = label + (spec ? ' · spectator' : '');
   });
 }
 
@@ -371,7 +406,7 @@ DECK.forEach((v, i) => {
 });
 function vote(v) {
   if (!state || state.revealed) return;
-  const me = state.players.find(p => p.pid === pid);
+  const me = state.players.find(p => p.pid === myId);
   if (me?.spectator) return;
   myVote = myVote === v ? null : v;
   keepVote(myStory, myVote);
@@ -384,7 +419,7 @@ function renderDeck(disabled) {
 
 function render() {
   const s = state, cur = s.stories[s.current] || null;
-  const me = s.players.find(p => p.pid === pid);
+  const me = s.players.find(p => p.pid === myId);
   const cid = cur ? cur.id : null;
   if (cid !== myStory) { myStory = cid; myVote = null; }
   if (!me || !me.voted) myVote = null;
@@ -419,7 +454,7 @@ $('stories').onclick = e => {
 };
 
 // Story edit/add modal. editIndex = -1 means "add new".
-const FIELDS = ['key', 'title', 'summary', 'link', 'estimate'];
+const FIELDS = ['key', 'title', 'summary', 'criteria', 'link', 'estimate'];
 let editIndex = -1;
 function openModal(i) {
   editIndex = i;
@@ -484,8 +519,21 @@ document.addEventListener('keydown', e => {
   else if (k === '?') $('helpDlg').showModal();
 });
 
+$('helpClose').onclick = () => $('helpDlg').close();
+$('create').onclick = createRoom;
+
 (async () => {
-  while (!(await probe())) if (!askKey()) break;
+  if (!room) return showLanding();
+  for (;;) {
+    const st = await probe();
+    if (st === 404) return showLanding(GONE);
+    if (st !== 401) break;
+    if (!askKey()) return showLanding('Password required.');
+  }
+  if (!name) {
+    name = (prompt('Your name?') || '').trim().slice(0, 40) || 'anon';
+    store.set('pp-name', name); $('me').textContent = name;
+  }
   connect();
 })();
 </script>

@@ -1,5 +1,6 @@
 // Planning poker. Zero dependencies, Node >=18. Run: node server.js  (see env vars below)
-// Env: PORT (3000), HOST (0.0.0.0), DATA_DIR (./data), PASSWORD (optional, required as ?key= when set)
+// Env: PORT (3000), HOST (0.0.0.0), DATA_DIR (./data), PASSWORD (optional, required as ?key= when set),
+//      ROOM_TTL_HOURS (168), MAX_ROOMS (1000), TRUST_PROXY (1 = behind a reverse proxy, use X-Forwarded-For)
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -13,7 +14,12 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'rooms.json');
 const INDEX = path.join(__dirname, 'index.html');
 const DECK = [0, 1, 2, 3, 5, 8, 13, 21];
-const MAX_FIELD = 10000, MAX_BODY = 5e6, COUNTDOWN = 3000, GRACE = 5000, TTL = 30 * 864e5;
+const VOTES = new Set([...DECK.map(String), '?', '☕']);
+const ROOM_TTL = (Number(process.env.ROOM_TTL_HOURS) || 168) * 36e5; // idle rooms are deleted after this
+const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 1000;
+const TRUST_PROXY = process.env.TRUST_PROXY === '1';
+const MAX_FIELD = 10000, MAX_BODY = 1e6, MAX_STORIES = 500, MAX_COLS = 50, MAX_PLAYERS = 50;
+const MAX_SSE_PER_IP = 20, MAX_SSE = 5000, COUNTDOWN = 3000, GRACE = 5000;
 const rooms = new Map();
 
 function newRoom() {
@@ -21,18 +27,35 @@ function newRoom() {
     headers: ['Summary', 'Key', 'Description', 'Link', 'Estimate'],
     stories: [], // row objects keyed by header, plus internal _id (never exported)
     current: -1,
-    rounds: {}, // storyId -> { votes: { pid: { value, name } }, revealed }
-    updatedAt: 0,
-    players: {}, // pid -> { name, conns, spectator } (never persisted)
+    rounds: {}, // storyId -> { votes: { playerId: { value, name } }, revealed }
+    updatedAt: 0, seenAt: Date.now(),
+    players: {}, // playerId -> { name, conns, spectator } (never persisted)
     clients: new Set(),
     timer: null, revealAt: null,
   };
 }
-function getRoom(id) {
-  if (!rooms.has(id)) rooms.set(id, newRoom());
-  return rooms.get(id);
-}
 const newId = () => crypto.randomBytes(6).toString('hex');
+// rooms are only created server-side, with unguessable ids (96 bits)
+function createRoom() {
+  const id = crypto.randomBytes(12).toString('base64url');
+  const r = newRoom();
+  rooms.set(id, r);
+  touch(r);
+  return id;
+}
+// clients hold a secret pid; everyone else only ever sees this derived public id
+const playerId = pid => crypto.createHash('sha256').update('pp:' + pid).digest('base64url').slice(0, 12);
+
+// delete rooms nobody used for ROOM_TTL
+function sweep() {
+  const cutoff = Date.now() - ROOM_TTL;
+  let n = 0;
+  for (const [id, r] of rooms) {
+    if (r.clients.size || Math.max(r.updatedAt, r.seenAt) > cutoff) continue;
+    cancelTimer(r); rooms.delete(id); n++;
+  }
+  if (n) { console.log(`expired ${n} room(s)`); flush(); }
+}
 
 // ---- persistence ----
 let saveTimer = null;
@@ -41,7 +64,7 @@ function flush() {
   const out = {};
   for (const [id, r] of rooms) {
     if (!r.updatedAt) continue;
-    out[id] = { headers: r.headers, stories: r.stories, current: r.current, rounds: r.rounds, updatedAt: r.updatedAt };
+    out[id] = { headers: r.headers, stories: r.stories, current: r.current, rounds: r.rounds, updatedAt: Math.max(r.updatedAt, r.seenAt) };
   }
   try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -58,9 +81,9 @@ function load() {
   try { data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
   catch (e) { if (e.code !== 'ENOENT') console.warn('could not load', DATA_FILE + ':', e.message); return; }
   for (const [id, d] of Object.entries(data || {})) {
-    if (!/^[\w-]{1,40}$/.test(id) || !d || !(d.updatedAt > Date.now() - TTL)) continue;
+    if (!/^[\w-]{1,40}$/.test(id) || !d || !(d.updatedAt > Date.now() - ROOM_TTL)) continue;
     const r = newRoom();
-    Object.assign(r, { headers: d.headers, stories: d.stories, current: d.current, rounds: d.rounds || {}, updatedAt: d.updatedAt });
+    Object.assign(r, { headers: d.headers, stories: d.stories, current: d.current, rounds: d.rounds || {}, updatedAt: d.updatedAt, seenAt: d.updatedAt });
     for (const s of r.stories) s._id = s._id || newId();
     rooms.set(id, r);
   }
@@ -100,12 +123,19 @@ function toCSV(headers, stories) {
     .map(r => r.map(esc).join(',')).join('\n') + '\n';
 }
 
+// column name -> accepted header spellings (case/accent-insensitive)
+const ALIASES = {
+  'acceptance criteria': ['acceptance criteria', 'acceptance criterion', 'ac', 'ca', 'cas', 'criteria',
+    'criterios de aceitacao', 'criterio de aceitacao', 'criterios de aceite', 'criterios de aceptacion'],
+};
+const norm = s => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
 function findHeader(headers, name) {
-  return headers.find(h => h.trim().toLowerCase() === name.toLowerCase());
+  const want = ALIASES[norm(name)] || [norm(name)];
+  return headers.find(h => want.includes(norm(h)));
 }
 
 // UI field name -> CSV column name
-const FIELD_COLS = { key: 'Key', title: 'Description', summary: 'Summary', link: 'Link', estimate: 'Estimate' };
+const FIELD_COLS = { key: 'Key', title: 'Description', summary: 'Summary', criteria: 'Acceptance Criteria', link: 'Link', estimate: 'Estimate' };
 
 function applyFields(room, story, fields = {}) {
   for (const [f, colName] of Object.entries(FIELD_COLS)) {
@@ -163,7 +193,7 @@ function doReveal(room) {
 // start/cancel auto-reveal countdown depending on current round state
 function evaluate(room) {
   const round = curRound(room);
-  const active = Object.entries(room.players).filter(([, p]) => p.conns > 0 && !p.spectator);
+  const active = Object.entries(room.players).filter(([, p]) => !p.spectator); // incl. reconnect grace window
   if (round && !round.revealed && active.length && active.every(([pid]) => pid in round.votes)) {
     if (!room.timer) {
       room.revealAt = Date.now() + COUNTDOWN;
@@ -181,6 +211,7 @@ function publicState(room) {
       key: s[col('Key')] || '',
       title: s[col('Description')] || '',
       summary: s[col('Summary')] || '',
+      criteria: s[col('Acceptance Criteria')] || '',
       link: s[col('Link')] || '',
       estimate: s[col('Estimate')] || '',
       voteCount: rd ? Object.keys(rd.votes).length : 0,
@@ -222,7 +253,7 @@ function readBody(req) {
   });
 }
 
-const PID_RE = /^(?!__proto__$)[\w-]{1,64}$/;
+const PID_RE = /^[\w-]{16,64}$/;
 const isIdx = (room, i) => Number.isInteger(i) && i >= 0 && i < room.stories.length;
 
 function handleAction(room, pid, a) {
@@ -232,7 +263,7 @@ function handleAction(room, pid, a) {
       const round = curRound(room, true);
       if (!round || round.revealed || (player && player.spectator)) return;
       if (a.value == null) delete round.votes[pid];
-      else round.votes[pid] = { value: String(a.value).slice(0, 8), name: player ? player.name : 'anon' };
+      else if (VOTES.has(String(a.value))) round.votes[pid] = { value: String(a.value), name: player ? player.name : 'anon' };
       break;
     }
     case 'reveal':
@@ -262,10 +293,10 @@ function handleAction(room, pid, a) {
     case 'import': {
       const rows = parseCSV(String(a.csv || ''));
       if (rows.length < 1) return;
-      const headers = rows[0].map(h => h.trim().slice(0, 200));
+      const headers = rows[0].slice(0, MAX_COLS).map(h => h.trim().slice(0, 200));
       if (!findHeader(headers, 'Estimate')) headers.push('Estimate');
       room.headers = headers;
-      room.stories = rows.slice(1).map(r => {
+      room.stories = rows.slice(1, MAX_STORIES + 1).map(r => {
         const s = Object.fromEntries(headers.map((h, i) => [h, String(r[i] ?? '').slice(0, MAX_FIELD)]));
         s._id = newId();
         return s;
@@ -276,6 +307,7 @@ function handleAction(room, pid, a) {
       break;
     }
     case 'add': {
+      if (room.stories.length >= MAX_STORIES) return;
       const s = Object.fromEntries(room.headers.map(x => [x, '']));
       applyFields(room, s, a.fields);
       s._id = newId();
@@ -309,66 +341,111 @@ function authOk(key) {
   return crypto.timingSafeEqual(h(key || ''), h(PASSWORD));
 }
 
+// fixed-window rate limits, per client ip
+const hits = new Map(); // `${bucket}|${ip}` -> { n, reset }
+function limited(ip, bucket, max, windowMs) {
+  const k = bucket + '|' + ip, now = Date.now();
+  let h = hits.get(k);
+  if (!h || h.reset < now) hits.set(k, h = { n: 0, reset: now + windowMs });
+  return ++h.n > max;
+}
+const sseByIp = new Map(); // ip -> open event streams
+let sseTotal = 0;
+
+function clientIp(req) {
+  // behind one reverse proxy the rightmost X-Forwarded-For entry is the one it added (not spoofable)
+  const xff = TRUST_PROXY && req.headers['x-forwarded-for'];
+  return xff ? xff.split(',').pop().trim() : req.socket.remoteAddress || '?';
+}
+
+const CSP = nonce => `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; ` +
+  `img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`;
+
+function send(res, status, body = '', headers = {}) {
+  res.writeHead(status, headers);
+  res.end(body);
+}
+
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   const url = new URL(req.url, 'http://x');
   const q = n => url.searchParams.get(n);
+  const ip = clientIp(req);
 
   if (req.method === 'GET' && url.pathname === '/') {
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    return fs.createReadStream(INDEX).pipe(res);
+    if (limited(ip, 'page', 120, 60e3)) return send(res, 429, 'slow down');
+    const nonce = crypto.randomBytes(16).toString('base64');
+    const html = fs.readFileSync(INDEX, 'utf8').replace(/<script>/g, `<script nonce="${nonce}">`);
+    return send(res, 200, html, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP(nonce), 'Cache-Control': 'no-store' });
   }
-  if (req.method === 'GET' && url.pathname === '/healthz') { res.writeHead(200); return res.end('ok'); }
+  if (req.method === 'GET' && url.pathname === '/healthz') return send(res, 200, 'ok');
 
-  if (!authOk(q('key'))) { res.writeHead(401); return res.end('unauthorized'); }
+  // throttle password guessing
+  if (PASSWORD && hits.get('authfail|' + ip)?.n >= 10 && hits.get('authfail|' + ip).reset > Date.now()) return send(res, 429, 'slow down');
+  if (!authOk(q('key'))) { limited(ip, 'authfail', 10, 10 * 60e3); return send(res, 401, 'unauthorized'); }
+
+  if (req.method === 'POST' && url.pathname === '/rooms') {
+    if (limited(ip, 'create', 10, 60 * 60e3)) return send(res, 429, 'too many rooms, try later');
+    if (rooms.size >= MAX_ROOMS) sweep();
+    if (rooms.size >= MAX_ROOMS) return send(res, 503, 'server full, try later');
+    return send(res, 200, JSON.stringify({ room: createRoom() }), { 'Content-Type': 'application/json' });
+  }
 
   const room = q('room');
-  if (!room) { res.writeHead(400); return res.end('missing room'); }
-  if (!/^[\w-]{1,40}$/.test(room)) { res.writeHead(400); return res.end('bad room'); }
+  if (!room || !/^[\w-]{1,40}$/.test(room)) return send(res, 400, 'bad room');
+  const r = rooms.get(room);
+  if (!r) return send(res, 404, 'room not found');
+
+  if (req.method === 'GET' && url.pathname === '/ping') return send(res, 204);
 
   if (req.method === 'GET' && url.pathname === '/export') {
-    const r = rooms.get(room) || newRoom();
-    res.writeHead(200, {
+    if (limited(ip, 'export', 30, 60e3)) return send(res, 429, 'slow down');
+    return send(res, 200, toCSV(r.headers, r.stories), {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="estimates-${room}.csv"`,
     });
-    return res.end(toCSV(r.headers, r.stories));
   }
 
-  const pidOk = PID_RE.test(q('pid') || '');
-
   if (req.method === 'GET' && url.pathname === '/events') {
-    const pid = q('pid');
-    if (!pidOk) { res.writeHead(400); return res.end('bad pid'); }
-    const name = (q('name') || '').trim().slice(0, 40) || 'anon';
-    const r = getRoom(room);
+    if (!PID_RE.test(q('pid') || '')) return send(res, 400, 'bad pid');
+    if (limited(ip, 'connect', 30, 60e3)) return send(res, 429, 'slow down');
+    if ((sseByIp.get(ip) || 0) >= MAX_SSE_PER_IP || sseTotal >= MAX_SSE) return send(res, 429, 'too many connections');
+    const id = playerId(q('pid'));
+    if (!r.players[id] && Object.keys(r.players).length >= MAX_PLAYERS) return send(res, 403, 'room full');
+    const name = (q('name') || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40) || 'anon';
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    res.write('retry: 2000\n\n');
-    const p = r.players[pid] = r.players[pid] || { name, conns: 0, spectator: false };
+    res.write(`retry: 2000\n\nevent: me\ndata: ${JSON.stringify({ id })}\n\n`);
+    sseByIp.set(ip, (sseByIp.get(ip) || 0) + 1); sseTotal++;
+    const p = r.players[id] = r.players[id] || { name, conns: 0, spectator: false };
     p.name = name;
     p.conns++;
     r.clients.add(res);
+    r.seenAt = Date.now();
     evaluate(r);
     broadcast(r);
     const ping = setInterval(() => res.write(': ping\n\n'), 15000);
     req.on('close', () => {
       clearInterval(ping);
+      const n = sseByIp.get(ip) - 1;
+      n > 0 ? sseByIp.set(ip, n) : sseByIp.delete(ip); sseTotal--;
       r.clients.delete(res);
-      if (r.players[pid] !== p || --p.conns > 0) return;
-      evaluate(r);
+      r.seenAt = Date.now();
+      if (r.players[id] !== p || --p.conns > 0) return;
       broadcast(r);
       // grace period so page reloads / reconnects don't drop the vote
       setTimeout(() => {
-        if (r.players[pid] !== p || p.conns > 0) return;
-        delete r.players[pid];
+        if (r.players[id] !== p || p.conns > 0) return;
+        delete r.players[id];
         const round = curRound(r);
-        if (round && !round.revealed) { delete round.votes[pid]; touch(r); }
+        if (round && !round.revealed) { delete round.votes[id]; touch(r); }
         evaluate(r);
         broadcast(r);
       }, GRACE);
@@ -377,26 +454,29 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === 'POST' && url.pathname === '/action') {
+    if (limited(ip, 'action', 60, 10e3)) return send(res, 429, 'slow down');
     try {
       const a = JSON.parse(await readBody(req));
       if (!a || typeof a !== 'object') throw new Error('bad body');
-      const pid = a.pid ?? q('pid'); // pid from body (query also accepted)
-      if (!PID_RE.test(pid || '')) { res.writeHead(400); return res.end('bad pid'); }
-      const r = getRoom(room);
-      handleAction(r, pid, a);
+      if (!PID_RE.test(a.pid || '')) return send(res, 400, 'bad pid');
+      handleAction(r, playerId(a.pid), a);
       evaluate(r);
       broadcast(r);
-      res.writeHead(204); return res.end();
+      return send(res, 204);
     } catch (e) {
-      if (e && e.status === 413) { res.writeHead(413, { Connection: 'close' }); return res.end('too large'); }
-      res.writeHead(400); return res.end(String(e && e.message || e));
+      if (e && e.status === 413) return send(res, 413, 'too large', { Connection: 'close' });
+      return send(res, 400, 'bad request');
     }
   }
 
-  res.writeHead(404); res.end('not found');
+  send(res, 404, 'not found');
 });
+server.headersTimeout = 15e3;
+server.requestTimeout = 30e3; // only covers receiving the request, not long-lived event streams
 
 load();
+setInterval(sweep, 10 * 60e3).unref();
+setInterval(() => { const now = Date.now(); for (const [k, h] of hits) if (h.reset < now) hits.delete(k); }, 60e3).unref();
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { flush(); process.exit(0); });
 
 server.listen(PORT, HOST, () => {
@@ -405,4 +485,5 @@ server.listen(PORT, HOST, () => {
     for (const i of list || []) if (i.family === 'IPv4' && !i.internal) console.log(`LAN: http://${i.address}:${PORT}`);
   console.log(`Public: ngrok http ${PORT}`);
   console.log(PASSWORD ? 'Password protection: ON (use ?key=...)' : 'Password protection: OFF');
+  console.log(`Idle rooms expire after ${ROOM_TTL / 36e5}h`);
 });
