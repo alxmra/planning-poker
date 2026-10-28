@@ -1,0 +1,63 @@
+﻿Key,Description,Summary,Acceptance Criteria,Link,Estimate
+US 1.8,Resolve delivery discrepancies,"As a purchasing manager,
+I want to review reported discrepancies and decide how to settle each one,
+so that every problem with a delivery ends in a clear outcome.","- The manager shall be able to see a list of open discrepancies with the PO, supplier, package, type, quantity, and who reported it and when
+- Discrepancies shall also be shown on their PO
+- Opening a discrepancy shall show the operator’s note
+- For each discrepancy, the manager shall be able to either accept the shortfall or raise a claim with the supplier, asking for a replacement or a credit, with a message
+- Accepting the shortfall resolves the discrepancy without contacting the supplier
+- Raising a claim notifies the supplier, and the claim shows as “awaiting supplier”
+- The manager shall see the supplier’s response, and can mark the claim as resolved, adding an outcome note if it was disputed
+- A PO with an open discrepancy or claim can’t be closed
+- Once all are resolved, the PO can be closed even if quantities are short, with the shortfall visible on the closed order
+- While a claim is open on a PO, late-delivery reminders for that PO shall be paused
+- Every decision shall be recorded in the PO’s history and in the audit log",,
+US 1.18,Claim response reminders,"As a purchasing manager,
+I want suppliers to be reminded automatically about claims they haven’t answered,
+so that delivery problems don’t stay open indefinitely.","- The system shall check for unanswered claims automatically once a day
+- A claim with no supplier response 3 working days after it was raised shall trigger a reminder to the supplier, by email and in-app
+- If there’s still no response 3 working days after the reminder, the manager who raised the claim shall be notified
+- Each reminder and notification is sent only once per claim
+- Reminders stop as soon as the supplier responds or the manager resolves the claim
+- Each reminder shall be recorded in the PO’s history
+- The check can also be triggered on demand, so it can be tested without waiting for the scheduled run",,
+US 2.6,Respond to a delivery claim,"As a supplier representative,
+I want to record missing, wrong or damaged items,
+so that the purchasing manager can resolve it with the supplier","- The representative shall be notified in-app and by email when a claim is raised against their company
+- The representative shall see only their company’s claims, each with the PO, package, items, type, quantity, the manager’s message, and the operator’s note and photos
+- The representative shall be able to respond by agreeing to send a replacement, offering a credit, or disputing the claim with a required reason
+- The response can be changed until the manager marks the claim as resolved
+- The purchasing manager shall be notified of the response
+- Agreeing to a replacement allows a replacement shipment to be registered for the claimed items",,
+US 2.7,Ship replacement items,"As a supplier representative,
+I want to register a replacement shipment for a claim I agreed to,
+so that the missing or damaged goods can be received like any other delivery","- The representative shall be notified in-app and by email when a claim is raised against their company
+- The representative shall see only their company’s claims, each with the PO, package, items, type, quantity, the manager’s message, and the operator’s note and photos
+- The representative shall be able to respond by agreeing to send a replacement, offering a credit, or disputing the claim with a required reason
+- The response can be changed until the manager marks the claim as resolved
+- The purchasing manager shall be notified of the response
+- Agreeing to a replacement allows a replacement shipment to be registered for the claimed items",,
+US 3.2,Report a discrepancy,"As a warehouse operator,
+I want to record missing, wrong or damaged items,
+so that the purchasing manager can resolve it with the supplier","- While confirming a package’s reception, the operator shall be able to mark one or more of its items as missing, damaged or wrong
+- For each discrepancy, the operator shall enter the affected quantity, which can’t exceed the quantity expected for that item in the package
+- For a wrong item, the operator shall describe what arrived instead
+- Each discrepancy requires a note
+- Only quantities received correctly and undamaged shall count as received on the PO
+- Refusing a whole package shall create a discrepancy covering all of its items, using the reason the operator gave
+- Each discrepancy shall be recorded with the operator who reported it and when
+- The purchasing manager who created the RFQ behind the PO shall be notified (in-app or other means)
+- The discrepancy screens shall work on a phone at the dock",,
+US 4.2,Audit log,"As a system administrator,
+I want to have access to a log of the actions performed on the platform
+so that I can investigate and follow them as needed.","- The administrator shall be able to view the audit log, newest entries first, showing the date and time, who performed the action, the action, and the record it affected (e.g. PO-2026-0151)
+- Actions performed automatically by the system shall be shown as “System”
+- The log shall be filterable by date range, user, action type and affected record
+- Opening an entry shall show its details, including the previous and new status when the action changed one
+- The log shall record every domain event published by the modules, including at least RFQs issued, quotes submitted and expired, POs issued, confirmed, declined and closed, shipments registered and packages received
+- Account changes made through the administration screen (creation, role change, deactivation and reactivation) shall also be recorded
+- The activity log shall be read-only and tamper-evident
+- Only administrators shall have access to the audit log
+- Passwords, tokens and other secrets shall never be recorded in the log
+- The log shall load in pages, so it stays responsive as it grows
+- The administrator shall be able to export the entries matching the current filters to a CSV file; each export is itself recorded in the audit log.",,
